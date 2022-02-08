@@ -1,14 +1,14 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 # simulation time unit: ms
 
 FPS = 30
-EPS = 10E-7
-
+N_BINS = 500
 FRAME_TIME_MU = 0.35 # unit ms
 FRAME_TIME_SIGMA = 0.1/2.3263  # 99% in +/- 0.1ms
 
-N_FRAME_PER_WAY = 10000
+N_FRAME_PER_WAY = 100
 N_WAYS = 80
 
 def gen_submission_N(size):
@@ -32,8 +32,18 @@ def main():
 
   frame_submission_N = gen_submission_N((N_WAYS, N_FRAME_PER_WAY))
 
+  # Plot the distribution
+
+  """
+  fig, axs = plt.subplots(1, 2)
+  axs[0].hist(frame_time_seq.flatten(), bins=N_BINS)
+  axs[1].hist(frame_submission_N.flatten(), bins=np.linspace(0.5, 10.5, 11), edgecolor='black')
+  plt.show()
+  """
+
   # Gen submission queue
   entire_item_queue = []
+  sch_time_table = np.zeros((N_WAYS, N_FRAME_PER_WAY))
 
   for i in range(N_WAYS):
 
@@ -42,6 +52,7 @@ def main():
 
     for j in range(N_FRAME_PER_WAY):
       scheduled_start_time = i * FRAME_TIME_MU + j * 1000 / FPS
+      sch_time_table[i][j] = scheduled_start_time
 
       item_duration = frame_time_seq[i, j] / frame_submission_N[i, j]
 
@@ -80,10 +91,12 @@ def main():
     head_item_plane.append(entire_item_queue[i].pop(0))
 
   loop_cnt = 0
+  last_sub_cnt = 0
   while(len(head_item_plane) > 0):
-    print("Loop count: " + str(loop_cnt))
-    print("Current Plane Length: " + str(len(head_item_plane)))
+    #print("Loop count: " + str(loop_cnt))
+    #print("Current Plane Length: " + str(len(head_item_plane)))
     loop_cnt += 1
+
     # Find the next item to be processed
     for idx in range(len(head_item_plane)):
       item = head_item_plane[idx]
@@ -97,9 +110,13 @@ def main():
 
     # Process the earliest item, update the queue
     current_item = head_item_plane[current_idx]
+    if current_item.is_1st_submission and current_item.submit_time > current_time:
+      current_time = current_item.submit_time
     current_time += current_item.duration
+
     if current_item.is_last_submission:
       complete_time_table[current_item.way_idx][current_item.frame_idx] = current_time
+      last_sub_cnt += 1
 
 
     # Update head_item_plane
@@ -109,11 +126,17 @@ def main():
     else:
       # Delete this way in plane
       del head_item_plane[current_idx]
+      del entire_item_queue[current_idx]
 
-  print(complete_time_table)
+  print("last sub count: " + str(last_sub_cnt))
 
+  diff_table = complete_time_table - sch_time_table
 
-  # Do statistics on GPU output
+  # Plot GPU output
+  fig, axs = plt.subplots()
+  axs.hist(diff_table.flatten(), bins=N_BINS)
+  plt.show()
+
 
 
 if __name__ == '__main__':
