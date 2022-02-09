@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-# simulation time unit: ms
+# Number Unit: ms
 
 FPS = 30
 N_BINS = 200
@@ -10,13 +10,14 @@ FRAME_TIME_SIGMA = 0.1/2.3263  # 99% in +/- 0.1ms
 
 N_FRAME_PER_WAY = 10000
 N_WAYS = 80
-WAY_GAP = 1000 / FPS / 80
+WAY_TIME_GAP = 1000 / FPS / 80
 
 WAYS_PER_ENCODER = 10
 N_ENCODER = int(N_WAYS / WAYS_PER_ENCODER)
-LATENCY_FRAME = 1000 / FPS / WAYS_PER_ENCODER
+FRAME_TIME = 1000 / FPS / WAYS_PER_ENCODER
 
 def gen_submission_N(size):
+  # Probability Distribution {1:P=0.5, {2:10}: P=0.5/9, {>10}: P=0}
   raw = np.ceil(np.random.uniform(0, 18, size))
   return (np.clip(raw, 9, 18) - 8).astype(int)
 
@@ -50,16 +51,16 @@ def main():
   axs1.set(xlabel='No. of Submission', ylabel='Histogram', title='No. of Submission Distribution')
 
   # Gen submission queue
-  entire_item_queue = []
+  entire_submission_queue = []
   sch_time_table = np.zeros((N_WAYS, N_FRAME_PER_WAY))
 
   for i in range(N_WAYS):
 
-    end_time_of_last_item = 0
+    end_time_of_last_submission = 0
     way_sub_queue = [] # submission queue of each way
 
     for j in range(N_FRAME_PER_WAY):
-      scheduled_start_time = i * WAY_GAP + j * 1000 / FPS
+      scheduled_start_time = i * WAY_TIME_GAP + j * 1000 / FPS
       sch_time_table[i][j] = scheduled_start_time
 
       item_duration = frame_time_seq[i, j] / frame_submission_N[i, j]
@@ -72,11 +73,11 @@ def main():
         if k == 0:
           item.is_1st_submission = True
           item.submit_time = scheduled_start_time
-          end_time_of_last_item = item.submit_time + item_duration
+          end_time_of_last_submission = item.submit_time + item_duration
         else:
           item.is_1st_submission = False
-          item.submit_time = end_time_of_last_item
-          end_time_of_last_item = item.submit_time + item_duration
+          item.submit_time = end_time_of_last_submission
+          end_time_of_last_submission = item.submit_time + item_duration
 
         if k == frame_submission_N[i, j] - 1:
           item.is_last_submission = True
@@ -87,7 +88,7 @@ def main():
 
         way_sub_queue.append(item) # append to way queue
 
-    entire_item_queue.append(way_sub_queue)
+    entire_submission_queue.append(way_sub_queue)
 
   # Process the submissions and record frame complete time
   current_time = 0
@@ -96,7 +97,7 @@ def main():
   complete_time_table = np.zeros((N_WAYS, N_FRAME_PER_WAY))
 
   for i in range(N_WAYS):
-    head_item_plane.append(entire_item_queue[i].pop(0))
+    head_item_plane.append(entire_submission_queue[i].pop(0))
 
   loop_cnt = 0
   last_sub_cnt = 0
@@ -128,13 +129,13 @@ def main():
 
 
     # Update head_item_plane
-    if len(entire_item_queue[current_idx]) > 0:
+    if len(entire_submission_queue[current_idx]) > 0:
       # Pop a new item
-      head_item_plane[current_idx] = entire_item_queue[current_idx].pop(0)
+      head_item_plane[current_idx] = entire_submission_queue[current_idx].pop(0)
     else:
       # Delete this way in plane
       del head_item_plane[current_idx]
-      del entire_item_queue[current_idx]
+      del entire_submission_queue[current_idx]
 
   print("last sub count: " + str(last_sub_cnt))
 
@@ -143,7 +144,6 @@ def main():
   # Plot GPU output
   fig1 = plt.figure()
   axs = fig1.add_subplot(1, 1, 1)
-  #kwargs = dict(histtype='stepfilled', alpha=0.3, density=True, bins=N_BINS)
   kwargs = dict(alpha=0.7, density=True, bins=N_BINS)
   l1 = axs.hist(frame_time_seq.flatten(), label='Time w/o blocking', **kwargs)
   l2 = axs.hist(diff_table_GPU.flatten(), label='Time w/ blocking', **kwargs)
@@ -160,14 +160,14 @@ def main():
         way_idx = WAYS_PER_ENCODER * j + k
 
         if i == 0 and k == 0:
-          current_time_array[j] = complete_time_table[way_idx][i] + LATENCY_FRAME
+          current_time_array[j] = complete_time_table[way_idx][i] + FRAME_TIME
           complete_time_codec[way_idx][i] = current_time_array[j]
         else:
           if complete_time_table[way_idx][i] < current_time_array[j]:
-            current_time_array[j] += LATENCY_FRAME
+            current_time_array[j] += FRAME_TIME
             complete_time_codec[way_idx][i] = current_time_array[j]
           else:
-            current_time_array[j] = complete_time_table[way_idx][i] + LATENCY_FRAME
+            current_time_array[j] = complete_time_table[way_idx][i] + FRAME_TIME
             complete_time_codec[way_idx][i] = current_time_array[j]
 
   diff_table_codec = complete_time_codec - complete_time_table
@@ -183,14 +183,14 @@ def main():
         way_idx = j * N_ENCODER + k
 
         if i == 0 and j == 0: # only first column and first group (8 ways)
-          current_time_array[k] = complete_time_table[way_idx][i] + LATENCY_FRAME
+          current_time_array[k] = complete_time_table[way_idx][i] + FRAME_TIME
           complete_time_interleave[way_idx][i] = current_time_array[k]
         else:
           if complete_time_table[way_idx][i] < current_time_array[k]:
-            current_time_array[k] += LATENCY_FRAME
+            current_time_array[k] += FRAME_TIME
             complete_time_interleave[way_idx][i] = current_time_array[k]
           else:
-            current_time_array[k] = complete_time_table[way_idx][i] + LATENCY_FRAME
+            current_time_array[k] = complete_time_table[way_idx][i] + FRAME_TIME
             complete_time_interleave[way_idx][i] = current_time_array[k]
 
   diff_table_interleave = complete_time_interleave - complete_time_table
