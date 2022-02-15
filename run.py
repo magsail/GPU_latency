@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 
 FPS = 30
 N_BINS = 200
-FRAME_TIME_MU = 0.35 # unit ms
-FRAME_TIME_SIGMA = 0.1/2.3263  # 99% in +/- 0.1ms
+FRAME_RENDER_TIME_MU = 0.35 # unit ms
+FRAME_RENDER_TIME_SIGMA = 0.1/2.3263  # 99% in +/- 0.1ms
 
 N_FRAME_PER_WAY = 10000
 N_WAYS = 80
@@ -14,13 +14,19 @@ WAY_TIME_GAP = 1000 / FPS / 80
 
 WAYS_PER_ENCODER = 10
 N_ENCODER = int(N_WAYS / WAYS_PER_ENCODER)
-FRAME_TIME = 1000 / FPS / WAYS_PER_ENCODER
+FRAME_ENCODE_TIME_MU = 1000 / FPS / WAYS_PER_ENCODER * 0.99 # 3.3ms
+FRAME_ENCODE_TIME_SIGMA = 0.05/2.3263  # 99% in +/- 0.05ms
 
 def gen_submission_N(size):
   # Probability Distribution {1:P=0.5, {2:10}: P=0.5/9, {>10}: P=0}
   raw = np.ceil(np.random.uniform(0, 18, size))
   return (np.clip(raw, 9, 18) - 8).astype(int)
 
+def gen_encode_time(size, distribution=False):
+  if distribution:
+    return np.random.normal(FRAME_ENCODE_TIME_MU, FRAME_ENCODE_TIME_SIGMA, size)
+  else:
+    return FRAME_ENCODE_TIME_MU
 
 class FrameSubItem:
   way_idx = None
@@ -33,7 +39,7 @@ class FrameSubItem:
 def main():
 
   # Gen frame time sequence
-  frame_time_seq = np.random.normal(FRAME_TIME_MU, FRAME_TIME_SIGMA,
+  frame_time_seq = np.random.normal(FRAME_RENDER_TIME_MU, FRAME_RENDER_TIME_SIGMA,
       (N_WAYS, N_FRAME_PER_WAY))
 
   frame_submission_N = gen_submission_N((N_WAYS, N_FRAME_PER_WAY))
@@ -139,35 +145,46 @@ def main():
 
   print("last sub count: " + str(last_sub_cnt))
 
-  diff_table_GPU = complete_time_table - sch_time_table
+  render_time_GPU = complete_time_table - sch_time_table
 
   # Plot GPU output
   fig1 = plt.figure()
   axs = fig1.add_subplot(1, 1, 1)
   kwargs = dict(alpha=0.7, density=True, bins=N_BINS)
   l1 = axs.hist(frame_time_seq.flatten(), label='Time w/o blocking', **kwargs)
-  l2 = axs.hist(diff_table_GPU.flatten(), label='Time w/ blocking', **kwargs)
+  l2 = axs.hist(render_time_GPU.flatten(), label='Time w/ blocking', **kwargs)
   axs.tick_params(axis='x', which='minor')
-  axs.set(xlabel='Frame Render Time (ms)', ylabel='Histogram', title='Distribution w/ and w/o blocking')
+  axs.set(xlabel='Frame Render Time (ms)', yscale='log', ylabel='Log Scale Histogram Normalized', title='Distribution w/ and w/o blocking')
+  axs.legend(['Time w/o blocking', 'Time w/ blocking'])
+
+  fig1_1 = plt.figure()
+  axs = fig1_1.add_subplot(1, 1, 1)
+  kwargs = dict(alpha=0.7, density=True, bins=N_BINS)
+  l1 = axs.hist(frame_time_seq.flatten(), label='Time w/o blocking', **kwargs)
+  l2 = axs.hist(render_time_GPU.flatten(), label='Time w/ blocking', **kwargs)
+  axs.tick_params(axis='x', which='minor')
+  axs.set(xlabel='Frame Render Time (ms)', ylabel='Histogram Normalized', title='Distribution w/ and w/o blocking')
   axs.legend(['Time w/o blocking', 'Time w/ blocking'])
 
   # Add video encoder latency
   complete_time_codec = np.zeros((N_WAYS, N_FRAME_PER_WAY))
+  encode_time_array = np.zeros((N_WAYS, N_FRAME_PER_WAY))
   current_time_array = np.zeros((N_ENCODER))
   for i in range(N_FRAME_PER_WAY):
     for j in range(N_ENCODER):
       for k in range(WAYS_PER_ENCODER):
         way_idx = WAYS_PER_ENCODER * j + k
 
+        encode_time_array[way_idx][i] = gen_encode_time(1)
         if i == 0 and k == 0:
-          current_time_array[j] = complete_time_table[way_idx][i] + FRAME_TIME
+          current_time_array[j] = complete_time_table[way_idx][i] + encode_time_array[way_idx][i]
           complete_time_codec[way_idx][i] = current_time_array[j]
         else:
           if complete_time_table[way_idx][i] < current_time_array[j]:
-            current_time_array[j] += FRAME_TIME
+            current_time_array[j] += encode_time_array[way_idx][i]
             complete_time_codec[way_idx][i] = current_time_array[j]
           else:
-            current_time_array[j] = complete_time_table[way_idx][i] + FRAME_TIME
+            current_time_array[j] = complete_time_table[way_idx][i] + encode_time_array[way_idx][i]
             complete_time_codec[way_idx][i] = current_time_array[j]
 
   diff_table_codec = complete_time_codec - complete_time_table
@@ -183,28 +200,53 @@ def main():
         way_idx = j * N_ENCODER + k
 
         if i == 0 and j == 0: # only first column and first group (8 ways)
-          current_time_array[k] = complete_time_table[way_idx][i] + FRAME_TIME
+          current_time_array[k] = complete_time_table[way_idx][i] + encode_time_array[way_idx][i]
           complete_time_interleave[way_idx][i] = current_time_array[k]
         else:
           if complete_time_table[way_idx][i] < current_time_array[k]:
-            current_time_array[k] += FRAME_TIME
+            current_time_array[k] += encode_time_array[way_idx][i]
             complete_time_interleave[way_idx][i] = current_time_array[k]
           else:
-            current_time_array[k] = complete_time_table[way_idx][i] + FRAME_TIME
+            current_time_array[k] = complete_time_table[way_idx][i] + encode_time_array[way_idx][i]
             complete_time_interleave[way_idx][i] = current_time_array[k]
 
   diff_table_interleave = complete_time_interleave - complete_time_table
 
   fig2 = plt.figure()
-  axs0 = fig2.add_subplot(1, 2, 1)
+  axs0 = fig2.add_subplot(1, 1, 1)
   axs0.hist(diff_table_codec.flatten(), bins=N_BINS)
   axs0.set(xlabel='Latency (ms)', ylabel='Histogram', title='Latency Distribution w/o Interleave')
   axs0.tick_params(axis='x', which='minor')
 
-  axs1 = fig2.add_subplot(1, 2, 2)
-  axs1.hist(diff_table_interleave.flatten(), bins=N_BINS)
-  axs1.set(xlabel='Latency (ms)', ylabel='Histogram', title='Latency Distribution w/ Interleave')
+  fig3 = plt.figure()
+  axs1 = fig3.add_subplot(1, 1, 1)
+  kwargs = dict(alpha=0.7, density=True, bins=N_BINS)
+  axs1.hist(diff_table_interleave.flatten(), **kwargs)
+  axs1.set(xlabel='Latency (ms)', ylabel='Histogram Normalized', title='Single Frame Encoding Latency Distribution')
   axs1.tick_params(axis='x', which='minor')
+
+  fig3_1 = plt.figure()
+  axs1 = fig3_1.add_subplot(1, 1, 1)
+  kwargs = dict(alpha=0.7, density=True, bins=N_BINS)
+  axs1.hist(diff_table_interleave.flatten(), **kwargs)
+  axs1.set(xlabel='Latency (ms)', yscale='log', ylabel='Log Scale Histogram Normalized', title='Single Frame Encoding Latency Distribution')
+  axs1.tick_params(axis='x', which='minor')
+
+  # Plot GPU + Encoder Latency
+  fig4_1 = plt.figure()
+  axs1 = fig4_1.add_subplot(1, 1, 1)
+  kwargs = dict(alpha=0.7, density=True, bins=N_BINS)
+  axs1.hist((diff_table_interleave + render_time_GPU).flatten(), **kwargs)
+  axs1.set(xlabel='Latency (ms)', ylabel='Histogram Normalized', title='Single Frame Render + Encoding Latency')
+  axs1.tick_params(axis='x', which='minor')
+
+  fig4 = plt.figure()
+  axs1 = fig4.add_subplot(1, 1, 1)
+  kwargs = dict(alpha=0.7, density=True, bins=N_BINS)
+  axs1.hist((diff_table_interleave + render_time_GPU).flatten(), **kwargs)
+  axs1.set(xlabel='Latency (ms)', yscale='log', ylabel='Log Scale Histogram Normalized', title='Single Frame Render + Encoding Latency')
+  axs1.tick_params(axis='x', which='minor')
+
   plt.show()
 
 if __name__ == '__main__':
